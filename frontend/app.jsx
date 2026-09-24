@@ -2,12 +2,12 @@ import React, {useState} from 'react';
 import {createRoot} from 'react-dom/client';
 
 function App() {
-  const [key,setKey]=useState(''), [admin,setAdmin]=useState(''), [actor,setActor]=useState('');
+  const [key,setKey]=useState(''), [admin,setAdmin]=useState(''), [actor,setActor]=useState(''), [actorKey,setActorKey]=useState('');
   const [assignment,setAssignment]=useState(null), [message,setMessage]=useState(''), [busy,setBusy]=useState(false);
   const [text,setText]=useState(''), [split,setSplit]=useState('pool'), [gold,setGold]=useState('');
   const [disagreements,setDisagreements]=useState([]), [report,setReport]=useState(null);
   async function api(path, data, method='POST') {
-    const response=await fetch(path,{method,headers:{'Content-Type':'application/json','X-API-Key':key,'X-Admin-Key':admin},...(data===undefined?{}:{body:JSON.stringify(data)})});
+    const response=await fetch(path,{method,headers:{'Content-Type':'application/json','X-API-Key':key,'X-Admin-Key':admin,'X-Actor-Key':actorKey},...(data===undefined?{}:{body:JSON.stringify(data)})});
     const body=await response.json();
     if(!response.ok) throw Error(typeof body.detail==='string'?body.detail:JSON.stringify(body.detail));
     return body;
@@ -15,10 +15,11 @@ function App() {
   async function action(work) {setBusy(true);setMessage('');try {await work();}catch(error){setMessage(error.message);}finally{setBusy(false);}}
   return <main><h1>LabelDesk</h1><p>Разметка текстов двумя участниками и разбор разногласий.</p>
     <section><h2>Доступ</h2><label>API-ключ<input type="password" value={key} onChange={e=>setKey(e.target.value)}/></label>
+      <label>Персональный ключ<input type="password" value={actorKey} onChange={e=>setActorKey(e.target.value)}/></label>
       <label>Ваш идентификатор<input value={actor} onChange={e=>setActor(e.target.value)} disabled={!!assignment}/></label>
       <label>Ключ администратора<input type="password" value={admin} onChange={e=>setAdmin(e.target.value)}/></label>
       <small>Ключи хранятся только в памяти этой страницы. Классы: 0 — негативный, 1 — позитивный.</small></section>
-    <section><h2>Разметка</h2><button disabled={busy||!!assignment||!actor} onClick={()=>action(async()=>{const r=await api('/claim',{actor});setAssignment(r.task?{...r,actor}:null);if(!r.task)setMessage('Доступных заданий пока нет.');})}>Получить задание</button>
+    <section><h2>Разметка</h2><button disabled={busy||!admin} onClick={()=>action(async()=>{const r=await api('/selection-runs',{});setMessage('Отбор поставлен в очередь: '+r.id);})}>Обновить активный отбор</button><button disabled={busy||!!assignment||!actor} onClick={()=>action(async()=>{const r=await api('/claim',{actor});setAssignment(r.task?{...r,actor}:null);if(!r.task)setMessage('Доступных заданий пока нет.');})}>Получить задание</button>
       {assignment&&<><blockquote>{assignment.task.text}</blockquote><p>Назначение действует 10 минут.</p>
       {[0,1].map(label=><button key={label} disabled={busy} onClick={()=>action(async()=>{await api('/annotations',{actor:assignment.actor,task_id:assignment.task.id,token:assignment.token,label});setAssignment(null);setMessage('Аннотация сохранена.');})}>{label===0?'Негативный':'Позитивный'}</button>)}
       <button disabled={busy} onClick={()=>setAssignment(null)}>Убрать с экрана</button></>}

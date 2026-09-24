@@ -10,7 +10,9 @@ def add(client, text="Отличная покупка", **kwargs):
 
 
 def submit(client, actor, label):
-    claimed = client.post("/claim", json={"actor": actor}).json()
+    claimed = client.post(
+        "/claim", json={"actor": actor}, headers={"X-Actor-Key": actor + "-key"}
+    ).json()
     assert claimed["task"]
     body = {
         "actor": actor,
@@ -18,7 +20,7 @@ def submit(client, actor, label):
         "token": claimed["token"],
         "label": label,
     }
-    response = client.post("/annotations", json=body)
+    response = client.post("/annotations", json=body, headers={"X-Actor-Key": actor + "-key"})
     assert response.status_code == 200
     return response, body
 
@@ -56,7 +58,12 @@ def test_consensus_and_no_self_double_annotation(client):
     assert client.post("/claim", json={"actor": "first"}).json()["task"] is None
     response, _ = submit(client, "second", 1)
     assert response.json()["resolved"] == 1
-    assert client.post("/claim", json={"actor": "third"}).json()["task"] is None
+    assert (
+        client.post("/claim", json={"actor": "third"}, headers={"X-Actor-Key": "third-key"}).json()[
+            "task"
+        ]
+        is None
+    )
 
 
 def test_test_set_is_hidden_and_immutable(client):
@@ -94,9 +101,16 @@ def test_lease_expiry_rejects_stale_annotation(client):
 
 def test_at_most_two_outstanding_assignments(client):
     add(client)
-    assert client.post("/claim", json={"actor": "a"}).json()["task"]
-    assert client.post("/claim", json={"actor": "b"}).json()["task"]
-    assert client.post("/claim", json={"actor": "c"}).json()["task"] is None
+    assert client.post("/claim", json={"actor": "a"}, headers={"X-Actor-Key": "a-key"}).json()[
+        "task"
+    ]
+    assert client.post("/claim", json={"actor": "b"}, headers={"X-Actor-Key": "b-key"}).json()[
+        "task"
+    ]
+    assert (
+        client.post("/claim", json={"actor": "c"}, headers={"X-Actor-Key": "c-key"}).json()["task"]
+        is None
+    )
 
 
 def test_frontend_and_auth(client):

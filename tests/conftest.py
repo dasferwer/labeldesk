@@ -1,3 +1,4 @@
+import json
 import os
 import uuid
 
@@ -18,10 +19,19 @@ def client(monkeypatch):
         conn.execute(sql.SQL("CREATE SCHEMA {}").format(sql.Identifier(schema)))
     monkeypatch.setenv("DATABASE_URL", make_conninfo(base, options=f"-c search_path={schema}"))
     monkeypatch.setenv("API_KEY", "test-key")
+    monkeypatch.setenv(
+        "ANNOTATOR_KEYS",
+        json.dumps({name: name + "-key" for name in ("first", "second", "third", "a", "b", "c")}),
+    )
     monkeypatch.setenv("ADMIN_KEY", "admin-key")
     try:
         with TestClient(
-            app, headers={"X-API-Key": "test-key", "X-Admin-Key": "admin-key"}
+            app,
+            headers={
+                "X-API-Key": "test-key",
+                "X-Admin-Key": "admin-key",
+                "X-Actor-Key": "first-key",
+            },
         ) as client:
             yield client
     finally:

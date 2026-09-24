@@ -1,3 +1,4 @@
+import json
 import os
 import secrets
 import uuid
@@ -12,6 +13,7 @@ from pydantic import BaseModel, Field
 
 from labeldesk.db import connect, init
 from labeldesk.learning import simulate, uncertainty
+from labeldesk.selection import submit as submit_selection
 
 
 @asynccontextmanager
@@ -30,6 +32,14 @@ def admin(x_admin_key: str = Header(default="")):
     key = os.environ.get("ADMIN_KEY", "")
     if not key or not secrets.compare_digest(x_admin_key, key):
         raise HTTPException(403, "Нужен ключ администратора")
+
+
+def actor_identity(x_actor_key: str = Header(default="")):
+    configured = json.loads(os.environ.get("ANNOTATOR_KEYS", "{}"))
+    for actor, key in configured.items():
+        if key and secrets.compare_digest(x_actor_key, key):
+            return actor
+    raise HTTPException(403, "Нужен персональный ключ разметчика")
 
 
 app = FastAPI(title="LabelDesk", lifespan=lifespan)
@@ -82,33 +92,54 @@ def add(task: Task):
 
 
 @app.post("/claim", dependencies=[Depends(authorize)])
-def claim(body: Claim):
+def claim(body: Claim, actor: str = Depends(actor_identity)):
+    if body.actor != actor:
+        raise HTTPException(403, "Ключ принадлежит другому разметчику")
     with connect() as conn:
         conn.execute("SELECT pg_advisory_xact_lock(320028)")
+        existing = conn.execute(
+            """SELECT t.id,t.text,t.revision,a.token,a.selection_run FROM assignments a
+            JOIN tasks t ON t.id=a.task_id WHERE a.actor=%s AND a.expires_at>now()
+            AND t.resolved IS NULL AND NOT EXISTS(SELECT 1 FROM annotations n WHERE n.task_id=t.id AND n.actor=a.actor)
+            ORDER BY a.expires_at LIMIT 1""",
+            (actor,),
+        ).fetchone()
+        if existing:
+            return {
+                "task": {k: existing[k] for k in ("id", "text", "revision")},
+                "token": existing["token"],
+                "selection_run": existing["selection_run"],
+            }
+        selection = conn.execute(
+            "SELECT max(id) AS id FROM selection_runs WHERE status='completed'"
+        ).fetchone()["id"]
         task = conn.execute(
             """SELECT t.id,t.text,t.revision FROM tasks t
+            LEFT JOIN rankings rank ON rank.task_id=t.id AND rank.run_id=%s
             WHERE t.split='pool' AND t.resolved IS NULL
             AND NOT EXISTS (SELECT 1 FROM annotations a WHERE a.task_id=t.id AND a.actor=%s)
             AND NOT EXISTS (SELECT 1 FROM assignments a WHERE a.task_id=t.id AND a.actor=%s AND a.expires_at>now())
             AND (SELECT count(DISTINCT actor) FROM (
                 SELECT actor FROM annotations WHERE task_id=t.id
                 UNION SELECT actor FROM assignments WHERE task_id=t.id AND expires_at>now()
-            ) participants)<2 ORDER BY t.id LIMIT 1 FOR UPDATE""",
-            (body.actor, body.actor),
+            ) participants)<2 ORDER BY rank.position NULLS LAST,t.id LIMIT 1 FOR UPDATE OF t""",
+            (selection, body.actor, body.actor),
         ).fetchone()
         if not task:
             return {"task": None}
         token = uuid.uuid4()
         conn.execute(
-            """INSERT INTO assignments VALUES (%s,%s,%s,now()+interval '10 minutes')
-            ON CONFLICT (task_id,actor) DO UPDATE SET token=EXCLUDED.token,expires_at=EXCLUDED.expires_at""",
-            (task["id"], body.actor, token),
+            """INSERT INTO assignments(task_id,actor,token,expires_at,selection_run) VALUES (%s,%s,%s,now()+interval '10 minutes',%s)
+            ON CONFLICT (task_id,actor) DO UPDATE SET token=EXCLUDED.token,expires_at=EXCLUDED.expires_at,selection_run=EXCLUDED.selection_run""",
+            (task["id"], body.actor, token, selection),
         )
-        return {"task": task, "token": token}
+        return {"task": task, "token": token, "selection_run": selection}
 
 
 @app.post("/annotations", dependencies=[Depends(authorize)])
-def annotate(body: Annotation):
+def annotate(body: Annotation, actor: str = Depends(actor_identity)):
+    if body.actor != actor:
+        raise HTTPException(403, "Ключ принадлежит другому разметчику")
     with connect() as conn:
         conn.execute("SELECT pg_advisory_xact_lock(320028)")
         task = conn.execute(
@@ -226,6 +257,49 @@ def history(identity: uuid.UUID):
                 (identity,),
             ).fetchall(),
         }
+
+
+@app.post("/selection-runs", status_code=202, dependencies=[Depends(authorize), Depends(admin)])
+def select_next():
+    try:
+        return submit_selection()
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
+@app.get("/selection-runs/{identity}", dependencies=[Depends(authorize), Depends(admin)])
+def selection_result(identity: int):
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT id,status,digest,error,created_at,finished_at FROM selection_runs WHERE id=%s",
+            (identity,),
+        ).fetchone()
+        if row is None:
+            raise HTTPException(404, "Запуск отбора не найден")
+        row["ranking"] = conn.execute(
+            "SELECT task_id,position FROM rankings WHERE run_id=%s ORDER BY position", (identity,)
+        ).fetchall()
+        return row
+
+
+@app.get("/agreement", dependencies=[Depends(authorize), Depends(admin)])
+def agreement():
+    from sklearn.metrics import cohen_kappa_score
+
+    with connect() as conn:
+        pairs = conn.execute(
+            "SELECT task_id,array_agg(label ORDER BY actor) AS labels FROM annotations GROUP BY task_id HAVING count(*)=2"
+        ).fetchall()
+    left = [p["labels"][0] for p in pairs]
+    right = [p["labels"][1] for p in pairs]
+    # При единственном общем классе знаменатель каппы равен нулю.
+    kappa = float(cohen_kappa_score(left, right)) if len(set(left + right)) > 1 else None
+    return {
+        "paired_tasks": len(pairs),
+        "agreement": sum(a == b for a, b in zip(left, right)) / len(pairs) if pairs else None,
+        "kappa": kappa,
+        "note": "Пары могут включать разных разметчиков; это сводный диагностический показатель",
+    }
 
 
 app.mount("/", StaticFiles(directory=Path(__file__).parent / "static", html=True), name="ui")

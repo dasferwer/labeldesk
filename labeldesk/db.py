@@ -31,4 +31,15 @@ def init():
             CREATE TABLE IF NOT EXISTS runs (
                 id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
                 report jsonb NOT NULL, created_at timestamptz NOT NULL DEFAULT now());
+            CREATE TABLE IF NOT EXISTS selection_runs (
+                id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+                snapshot jsonb NOT NULL,digest text NOT NULL UNIQUE,
+                status text NOT NULL DEFAULT 'queued',error text,
+                created_at timestamptz NOT NULL DEFAULT now(),finished_at timestamptz);
+            CREATE TABLE IF NOT EXISTS rankings (
+                run_id bigint REFERENCES selection_runs(id),task_id uuid REFERENCES tasks(id),
+                position integer NOT NULL,PRIMARY KEY(run_id,task_id));
+            ALTER TABLE assignments ADD COLUMN IF NOT EXISTS selection_run bigint REFERENCES selection_runs(id);
+            CREATE INDEX IF NOT EXISTS assignments_actor ON assignments(actor,expires_at);
+            CREATE INDEX IF NOT EXISTS rankings_order ON rankings(run_id,position);
         """)

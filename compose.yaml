@@ -14,11 +14,18 @@ services:
       retries: 30
   api:
     build: .
-    environment:
+    environment: &environment
       DATABASE_URL: postgresql://demo:demo@database/labeldesk
       API_KEY: local-demo-key
       ADMIN_KEY: local-admin-key
+      ANNOTATOR_KEYS: '{"first":"local-first-key","second":"local-second-key"}'
     ports: ["127.0.0.1:8092:8000"]
+    depends_on:
+      database: {condition: service_healthy}
+  worker:
+    build: .
+    command: ["python","-m","labeldesk.worker"]
+    environment: *environment
     depends_on:
       database: {condition: service_healthy}
 volumes:

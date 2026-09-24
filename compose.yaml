@@ -1,0 +1,25 @@
+services:
+  database:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: demo
+      POSTGRES_PASSWORD: demo
+      POSTGRES_DB: labeldesk
+    ports: ["127.0.0.1:54832:5432"]
+    volumes: ["database:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U demo -d labeldesk"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+  api:
+    build: .
+    environment:
+      DATABASE_URL: postgresql://demo:demo@database/labeldesk
+      API_KEY: local-demo-key
+      ADMIN_KEY: local-admin-key
+    ports: ["127.0.0.1:8092:8000"]
+    depends_on:
+      database: {condition: service_healthy}
+volumes:
+  database:

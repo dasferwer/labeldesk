@@ -1,0 +1,1 @@
+{"name":"labeldesk-ui","version":"0.1.0","private":true,"scripts":{"build":"esbuild app.jsx --bundle --minify --outfile=../labeldesk/static/app.js"},"dependencies":{"react":"^19.0.0","react-dom":"^19.0.0"},"devDependencies":{"esbuild":"^0.25.0"}}
